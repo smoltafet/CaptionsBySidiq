@@ -1,36 +1,10 @@
-This is a [Next.js](https://nextjs.org/) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+CaptionBySide is a generator specifically for the Persian language. The captions generator takes a video, transcribes it to Persian and than applies captions on the video. The captions can be adjustable with a nice editor and you have options like colors, margins, etc. I built the project from scratch using Next.JS 13, React, Tailwind.css and WebAssembly. For storage I used an AWS S3 bucket and for transcription we I used an AWS Transcribe service. 
 
-## Getting Started
-
-First, run the development server:
-
-```bash
+TO RUN:
 npm run dev
 # or
 yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
-
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
 
-This project uses [`next/font`](https://nextjs.org/docs/basic-features/font-optimization) to automatically optimize and load Inter, a custom Google Font.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js/) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/deployment) for more details.
+<img width="977" alt="Screenshot 2024-06-22 at 10 31 16 PM" src="https://github.com/smoltafet/CaptionsBySidiq/assets/109406581/a22741a3-4996-4d25-9f7c-267ce41a4d48">
