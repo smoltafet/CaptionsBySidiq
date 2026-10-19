@@ -76,6 +76,98 @@ export function secondsToSrtTimestamp(time) {
   return `${pad(hours)}:${pad(minutes)}:${pad(seconds)},${pad(milliseconds, 3)}`;
 }
 
+/**
+ * Readability limits for grouped cues. Caption files with one cue per
+ * word are technically valid but painful to read in a player and to
+ * scan in an editor, so the exporters group words into phrase-sized
+ * cues. A new cue starts when any limit would be exceeded, when the
+ * pause before the next word is long, or at a sentence boundary.
+ */
+export const DEFAULT_CUE_LIMITS = {
+  maxCharacters: 84,
+  maxDurationSeconds: 7,
+  maxWords: 14,
+  maxGapSeconds: 1.2,
+};
+
+const SENTENCE_END = /[.!?…]["')\]]?$/;
+
+function toSeconds(value) {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+/**
+ * Group timed word items ({start_time, end_time, content}) into
+ * readable cues of the same shape. Pure: the input items are not
+ * mutated, and cue times always satisfy start <= end.
+ */
+export function groupItemsIntoCues(items, limits) {
+  const {
+    maxCharacters,
+    maxDurationSeconds,
+    maxWords,
+    maxGapSeconds,
+  } = {...DEFAULT_CUE_LIMITS, ...(limits || {})};
+
+  const cues = [];
+  let cue = null;
+
+  const flush = () => {
+    if (cue) {
+      cues.push(cue);
+      cue = null;
+    }
+  };
+
+  for (const item of items || []) {
+    const content = typeof item?.content === 'string' ? item.content.trim() : '';
+    const start = toSeconds(item?.start_time);
+    if (!content || start == null) {
+      continue;
+    }
+    const parsedEnd = toSeconds(item?.end_time);
+    const end = parsedEnd != null && parsedEnd >= start ? parsedEnd : start;
+
+    if (cue) {
+      const joinedLength = cue.content.length + 1 + content.length;
+      const breaksCue =
+        start - cue.endSeconds > maxGapSeconds
+        || end - cue.startSeconds > maxDurationSeconds
+        || cue.wordCount >= maxWords
+        || joinedLength > maxCharacters
+        || SENTENCE_END.test(cue.content);
+      if (breaksCue) {
+        flush();
+      }
+    }
+
+    if (!cue) {
+      cue = {
+        start_time: String(start),
+        end_time: String(end),
+        content,
+        startSeconds: start,
+        endSeconds: end,
+        wordCount: 1,
+      };
+    } else {
+      cue.content += ' ' + content;
+      cue.end_time = String(end);
+      cue.endSeconds = end;
+      cue.wordCount += 1;
+    }
+  }
+  flush();
+
+  // Strip the internal bookkeeping fields from the result.
+  return cues.map(({start_time, end_time, content}) => ({
+    start_time,
+    end_time,
+    content,
+  }));
+}
+
 function itemsToCues(items, formatTimestamp) {
   let output = '';
   let i = 1;
@@ -95,17 +187,28 @@ function itemsToCues(items, formatTimestamp) {
   return output;
 }
 
-export function transcriptionItemsToSrt(items) {
-  return itemsToCues(items, secondsToSrtTimestamp);
+/**
+ * Export items as SRT. By default words are grouped into readable
+ * cues (see groupItemsIntoCues); pass {groupCues: false} for the raw
+ * one-cue-per-word output the word-by-word burn-in rendering uses.
+ */
+export function transcriptionItemsToSrt(items, options) {
+  const cues = options?.groupCues === false
+    ? items
+    : groupItemsIntoCues(items, options?.cueLimits);
+  return itemsToCues(cues, secondsToSrtTimestamp);
 }
 
 /**
  * Format the same caption items as WebVTT, for use with the native
  * <track> element. VTT timestamps use a '.' millisecond separator.
  */
-export function transcriptionItemsToVtt(items) {
+export function transcriptionItemsToVtt(items, options) {
+  const grouped = options?.groupCues === false
+    ? items
+    : groupItemsIntoCues(items, options?.cueLimits);
   const cues = itemsToCues(
-    items,
+    grouped,
     (time) => secondsToSrtTimestamp(time).replace(',', '.')
   );
   return 'WEBVTT\n\n' + cues;
