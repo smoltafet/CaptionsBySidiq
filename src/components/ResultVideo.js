@@ -1,5 +1,5 @@
 import SparklesIcon from "@/components/SparklesIcon";
-import {transcriptionItemsToSrt} from "@/libs/awsTranscriptionHelpers";
+import {transcriptionItemsToSrt, transcriptionItemsToVtt} from "@/libs/awsTranscriptionHelpers";
 import {FFmpeg} from "@ffmpeg/ffmpeg";
 import {toBlobURL, fetchFile} from "@ffmpeg/util";
 import {useEffect, useState, useRef} from "react";
@@ -30,6 +30,20 @@ export default function ResultVideo({filename,transcriptionItems}) {
     await ffmpeg.writeFile('/tmp/roboto.ttf', await fetchFile(roboto));
     await ffmpeg.writeFile('/tmp/roboto-bold.ttf', await fetchFile(robotoBold));
     setLoaded(true);
+  }
+
+  function downloadCaptions(format) {
+    const isVtt = format === 'vtt';
+    const content = isVtt
+      ? transcriptionItemsToVtt(transcriptionItems)
+      : transcriptionItemsToSrt(transcriptionItems);
+    const blob = new Blob([content], {type: 'text/plain'});
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename.replace(/\.[^.]+$/, '') + (isVtt ? '.vtt' : '.srt');
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
   function toFFmpegColor(rgb) {
@@ -71,12 +85,22 @@ export default function ResultVideo({filename,transcriptionItems}) {
 
   return (
     <>
-      <div className="mb-4">
+      <div className="mb-4 flex flex-wrap gap-2">
         <button
           onClick={transcode}
           className="bg-green-600 py-2 px-6 rounded-full inline-flex gap-2 border-2 border-purple-700/50 cursor-pointer">
           <SparklesIcon />
           <span>Apply captions</span>
+        </button>
+        <button
+          onClick={() => downloadCaptions('srt')}
+          className="bg-gray-700 py-2 px-6 rounded-full inline-flex gap-2 border-2 border-purple-700/50 cursor-pointer">
+          <span>Download .srt</span>
+        </button>
+        <button
+          onClick={() => downloadCaptions('vtt')}
+          className="bg-gray-700 py-2 px-6 rounded-full inline-flex gap-2 border-2 border-purple-700/50 cursor-pointer">
+          <span>Download .vtt</span>
         </button>
       </div>
       <div>
