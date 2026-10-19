@@ -53,7 +53,10 @@ export default function ResultVideo({filename,transcriptionItems}) {
 
   const transcode = async () => {
     const ffmpeg = ffmpegRef.current;
-    const srt = transcriptionItemsToSrt(transcriptionItems);
+    // Burned-in captions keep the one-word-at-a-time style, so the
+    // transcode uses raw cues; the downloadable files use grouped,
+    // readable cues (the exporters' default).
+    const srt = transcriptionItemsToSrt(transcriptionItems, {groupCues: false});
     await ffmpeg.writeFile(filename, await fetchFile(videoUrl));
     await ffmpeg.writeFile('subs.srt', srt);
     videoRef.current.src = videoUrl;
