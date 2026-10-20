@@ -168,6 +168,100 @@ export function groupItemsIntoCues(items, limits) {
   }));
 }
 
+/**
+ * Minimum cue length, in seconds, used when an item has no usable end
+ * time and no following item to borrow one from.
+ */
+export const MIN_CUE_DURATION_SECONDS = 0.1;
+
+/**
+ * Normalize timed caption items into a clean, export-safe timeline:
+ *
+ *   - items are sorted by start time (edits in the transcription
+ *     editor can leave them out of order, and both exporters and the
+ *     cue grouper assume chronological input);
+ *   - items with no text or no usable start time are dropped;
+ *   - a missing or inverted end time is repaired from the next item's
+ *     start, or a minimum duration when there is no next item;
+ *   - overlaps are resolved by trimming the earlier item's end to the
+ *     next item's start. If trimming would make the earlier item
+ *     zero-length, its text is merged into the next item instead of
+ *     being silently lost.
+ *
+ * Pure: the input items are not mutated. Times in the result are
+ * strings, matching the shape the rest of this module produces.
+ */
+export function normalizeCaptionItems(items) {
+  const parsed = [];
+  for (const item of items || []) {
+    const content = typeof item?.content === 'string' ? item.content.trim() : '';
+    const start = toSeconds(item?.start_time);
+    if (!content || start == null) {
+      continue;
+    }
+    parsed.push({ start, end: toSeconds(item?.end_time), content });
+  }
+  parsed.sort((a, b) => a.start - b.start || (a.end ?? a.start) - (b.end ?? b.start));
+
+  const normalized = [];
+  for (let i = 0; i < parsed.length; i++) {
+    const item = parsed[i];
+    let { end } = item;
+    if (end == null || end <= item.start) {
+      const nextStart = i + 1 < parsed.length ? parsed[i + 1].start : null;
+      end = nextStart != null && nextStart > item.start
+        ? nextStart
+        : item.start + MIN_CUE_DURATION_SECONDS;
+    }
+
+    const previous = normalized[normalized.length - 1];
+    if (previous && item.start < previous.end) {
+      if (item.start > previous.start) {
+        previous.end = item.start;
+      } else {
+        // Trimming would erase the previous item: fold its text into
+        // this one (which starts no later) and drop the empty shell.
+        item.content = `${previous.content} ${item.content}`;
+        normalized.pop();
+      }
+    }
+    normalized.push({ start: item.start, end, content: item.content });
+  }
+
+  return normalized.map(({ start, end, content }) => ({
+    start_time: String(start),
+    end_time: String(end),
+    content,
+  }));
+}
+
+/**
+ * Shift every item's timings by `offsetSeconds` (negative shifts
+ * earlier). Used to re-sync captions against a video whose start was
+ * trimmed. Items that would end at or before zero are dropped; items
+ * straddling zero are clamped to start at zero. Pure.
+ */
+export function shiftCaptionItems(items, offsetSeconds) {
+  const offset = Number.parseFloat(offsetSeconds);
+  if (!Number.isFinite(offset) || offset === 0) {
+    return normalizeCaptionItems(items);
+  }
+  const shifted = [];
+  for (const item of normalizeCaptionItems(items)) {
+    const start = Number.parseFloat(item.start_time) + offset;
+    const end = Number.parseFloat(item.end_time) + offset;
+    if (end <= 0) {
+      continue;
+    }
+    shifted.push({
+      start_time: String(Math.max(0, start)),
+      end_time: String(end),
+      content: item.content,
+    });
+  }
+  return shifted;
+}
+
 function itemsToCues(items, formatTimestamp) {
   let output = '';
   let i = 1;
@@ -193,9 +287,10 @@ function itemsToCues(items, formatTimestamp) {
  * one-cue-per-word output the word-by-word burn-in rendering uses.
  */
 export function transcriptionItemsToSrt(items, options) {
+  const normalized = normalizeCaptionItems(items);
   const cues = options?.groupCues === false
-    ? items
-    : groupItemsIntoCues(items, options?.cueLimits);
+    ? normalized
+    : groupItemsIntoCues(normalized, options?.cueLimits);
   return itemsToCues(cues, secondsToSrtTimestamp);
 }
 
@@ -204,9 +299,10 @@ export function transcriptionItemsToSrt(items, options) {
  * <track> element. VTT timestamps use a '.' millisecond separator.
  */
 export function transcriptionItemsToVtt(items, options) {
+  const normalized = normalizeCaptionItems(items);
   const grouped = options?.groupCues === false
-    ? items
-    : groupItemsIntoCues(items, options?.cueLimits);
+    ? normalized
+    : groupItemsIntoCues(normalized, options?.cueLimits);
   const cues = itemsToCues(
     grouped,
     (time) => secondsToSrtTimestamp(time).replace(',', '.')
