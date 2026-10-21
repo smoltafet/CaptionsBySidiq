@@ -309,3 +309,122 @@ export function transcriptionItemsToVtt(items, options) {
   );
   return 'WEBVTT\n\n' + cues;
 }
+
+/**
+ * Readability limits for caption quality analysis. These mirror the
+ * grouping limits above plus delivery rules used by broadcast
+ * captioning: text shown faster than ~20 characters per second is hard
+ * to read, and cues shorter than ~0.8s flash by before they register.
+ */
+export const DEFAULT_QUALITY_LIMITS = {
+  maxCharsPerSecond: 20,
+  minDurationSeconds: 0.8,
+  maxDurationSeconds: 7,
+  maxCharacters: 84,
+  maxWordsPerCue: 14,
+};
+
+/**
+ * Analyze one grouped cue: its timing, reading speed, and any
+ * readability issues. Issue codes are stable strings so the editor can
+ * count and label them: 'too-fast', 'too-short', 'too-long',
+ * 'too-many-chars', 'too-many-words'.
+ */
+export function analyzeCaptionCue(cue, index, limits) {
+  const resolved = {...DEFAULT_QUALITY_LIMITS, ...(limits || {})};
+  const start = toSeconds(cue?.start_time) ?? 0;
+  const parsedEnd = toSeconds(cue?.end_time);
+  const end = parsedEnd != null && parsedEnd >= start ? parsedEnd : start;
+  const durationSeconds = end - start;
+  const content = typeof cue?.content === 'string' ? cue.content.trim() : '';
+  const characters = content.length;
+  const words = content === '' ? 0 : content.split(/\s+/).length;
+  const charsPerSecond = durationSeconds > 0
+    ? characters / durationSeconds
+    : (characters > 0 ? Number.POSITIVE_INFINITY : 0);
+
+  const issues = [];
+  if (charsPerSecond > resolved.maxCharsPerSecond) {
+    issues.push('too-fast');
+  }
+  if (durationSeconds < resolved.minDurationSeconds) {
+    issues.push('too-short');
+  }
+  if (durationSeconds > resolved.maxDurationSeconds) {
+    issues.push('too-long');
+  }
+  if (characters > resolved.maxCharacters) {
+    issues.push('too-many-chars');
+  }
+  if (words > resolved.maxWordsPerCue) {
+    issues.push('too-many-words');
+  }
+
+  return {
+    index,
+    start_time: cue?.start_time,
+    end_time: cue?.end_time,
+    content,
+    durationSeconds,
+    characters,
+    words,
+    charsPerSecond,
+    issues,
+  };
+}
+
+/**
+ * Score a whole caption track's readability, 0-100.
+ *
+ * The track is normalized and grouped into cues first (the same cues
+ * the exporters emit), each cue is analyzed, and the score starts at
+ * 100 with a penalty per issue scaled by how much of the track it
+ * affects: an issue on every cue costs far more than one bad cue in a
+ * long video. Returns the per-cue analyses too, so the editor can
+ * point at exactly which cues need work.
+ */
+export function summarizeCaptionQuality(items, limits) {
+  const normalized = normalizeCaptionItems(items);
+  const cues = groupItemsIntoCues(normalized, limits);
+  const analyses = cues.map((cue, index) => analyzeCaptionCue(cue, index, limits));
+
+  const issueCounts = {};
+  let cuesWithIssues = 0;
+  let worstCharsPerSecond = 0;
+  let totalCharsPerSecond = 0;
+  let totalDurationSeconds = 0;
+  for (const analysis of analyses) {
+    if (analysis.issues.length > 0) {
+      cuesWithIssues += 1;
+    }
+    for (const issue of analysis.issues) {
+      issueCounts[issue] = (issueCounts[issue] || 0) + 1;
+    }
+    if (Number.isFinite(analysis.charsPerSecond)) {
+      worstCharsPerSecond = Math.max(worstCharsPerSecond, analysis.charsPerSecond);
+      totalCharsPerSecond += analysis.charsPerSecond;
+    }
+    totalDurationSeconds += analysis.durationSeconds;
+  }
+
+  const cueCount = analyses.length;
+  const totalIssues = Object.values(issueCounts).reduce((sum, n) => sum + n, 0);
+  // Penalty is 40 points per issue-per-cue on average: a track where
+  // every cue has exactly one issue scores 60, stacked issues push it
+  // lower, and clean tracks stay at 100.
+  const penalty = cueCount === 0 ? 0 : Math.min(100, (totalIssues / cueCount) * 40);
+  const score = Math.round(100 - penalty);
+
+  return {
+    score,
+    cueCount,
+    wordCount: analyses.reduce((sum, a) => sum + a.words, 0),
+    cuesWithIssues,
+    issueCounts,
+    totalIssues,
+    averageCharsPerSecond: cueCount === 0 ? 0 : totalCharsPerSecond / cueCount,
+    worstCharsPerSecond,
+    totalDurationSeconds,
+    analyses,
+  };
+}
