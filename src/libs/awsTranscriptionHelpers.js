@@ -428,3 +428,123 @@ export function summarizeCaptionQuality(items, limits) {
     analyses,
   };
 }
+
+/**
+ * Parse one caption timestamp ("00:01:02,500" SRT style or
+ * "00:01:02.500" / "01:02.500" VTT style) into seconds. Returns null
+ * for anything that is not a well-formed timestamp: the hour field is
+ * optional, minutes/seconds must be two digits, and the fractional
+ * part is 1-3 digits interpreted as milliseconds.
+ */
+export function parseCaptionTimestamp(text) {
+  if (typeof text !== 'string') {
+    return null;
+  }
+  const match = text.trim().match(/^(?:(\d+):)?(\d{2}):(\d{2})[.,](\d{1,3})$/);
+  if (!match) {
+    return null;
+  }
+  const hours = match[1] ? Number.parseInt(match[1], 10) : 0;
+  const minutes = Number.parseInt(match[2], 10);
+  const seconds = Number.parseInt(match[3], 10);
+  if (minutes > 59 || seconds > 59) {
+    return null;
+  }
+  const millis = Number.parseInt(match[4].padEnd(3, '0'), 10);
+  return hours * 3600 + minutes * 60 + seconds + millis / 1000;
+}
+
+const TIMING_LINE = /^(\S+)\s+-->\s+(\S+)(?:\s+.*)?$/;
+
+/**
+ * Parse the cue blocks of an SRT or WebVTT document into timed items
+ * of the same {start_time, end_time, content} shape the exporters
+ * consume, so a caption file can be imported, edited, and re-exported
+ * losslessly. start_time/end_time are strings with three decimals,
+ * matching what AWS Transcribe produces.
+ *
+ * Deliberately forgiving, the way real-world caption files are messy:
+ * an optional numeric SRT index or VTT cue identifier line is
+ * skipped, a leading "WEBVTT" header (and any NOTE/STYLE/REGION
+ * blocks in VTT) are ignored, cue settings after the end timestamp
+ * are dropped, multi-line cue text is joined with spaces, inline tags
+ * like <i> are preserved in the text, CRLF and stray blank lines are
+ * tolerated, and blocks whose timing line does not parse are skipped
+ * rather than aborting the whole import. Items come back normalized
+ * (sorted, overlaps repaired) via normalizeCaptionItems.
+ */
+export function parseCaptionText(text) {
+  if (typeof text !== 'string' || text.trim() === '') {
+    return [];
+  }
+  const normalized = text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+  const blocks = normalized.split(/\n\s*\n/);
+  const items = [];
+
+  for (const block of blocks) {
+    const lines = block.split('\n').map((line) => line.trim()).filter((line) => line !== '');
+    if (lines.length === 0) {
+      continue;
+    }
+    // Skip the VTT header and metadata blocks.
+    if (/^WEBVTT($|\s)/.test(lines[0]) || /^(NOTE|STYLE|REGION)($|\s)/.test(lines[0])) {
+      continue;
+    }
+    // Find the timing line: it is the first line when there is no
+    // index/identifier, the second when there is one.
+    let timingIndex = lines.findIndex((line) => TIMING_LINE.test(line));
+    if (timingIndex === -1 || timingIndex > 1) {
+      continue;
+    }
+    const timing = lines[timingIndex].match(TIMING_LINE);
+    const start = parseCaptionTimestamp(timing[1]);
+    const end = parseCaptionTimestamp(timing[2]);
+    if (start == null || end == null || end < start) {
+      continue;
+    }
+    const content = lines.slice(timingIndex + 1).join(' ').trim();
+    if (content === '') {
+      continue;
+    }
+    items.push({
+      start_time: start.toFixed(3),
+      end_time: end.toFixed(3),
+      content,
+    });
+  }
+
+  return normalizeCaptionItems(items);
+}
+
+/** Parse an SRT document into timed caption items. */
+export function srtToTranscriptionItems(text) {
+  return parseCaptionText(text);
+}
+
+/** Parse a WebVTT document into timed caption items. */
+export function vttToTranscriptionItems(text) {
+  return parseCaptionText(text);
+}
+
+/**
+ * Find the grouped cue showing at a given playback time, for
+ * click-to-seek highlighting in the editor. Returns the cue (the same
+ * grouped shape the exporters emit) plus its index, or null when the
+ * time falls in a gap or outside the track. A time exactly at a cue's
+ * end belongs to the next cue when one starts there.
+ */
+export function findCueAtTime(items, timeSeconds) {
+  const time = toSeconds(timeSeconds);
+  if (time == null) {
+    return null;
+  }
+  const cues = groupItemsIntoCues(normalizeCaptionItems(items));
+  for (let index = 0; index < cues.length; index++) {
+    const start = toSeconds(cues[index].start_time) ?? 0;
+    const end = toSeconds(cues[index].end_time) ?? start;
+    if (time >= start && time < end) {
+      return { index, cue: cues[index] };
+    }
+  }
+  return null;
+}
