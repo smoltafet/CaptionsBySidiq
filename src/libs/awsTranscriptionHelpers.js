@@ -548,3 +548,74 @@ export function findCueAtTime(items, timeSeconds) {
   }
   return null;
 }
+
+/**
+ * Escape a string for literal use inside a RegExp.
+ */
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Find every occurrence of `query` in the caption text, case
+ * insensitively. Transcriptions routinely get the same name or term
+ * wrong the same way throughout, and until now the only way to find
+ * each occurrence was to read the whole track. Returns one entry per
+ * occurrence: the index into the normalized item list, that item's
+ * times and text, and where in the text the match starts, so the
+ * editor can jump to and highlight occurrences. An empty or
+ * whitespace-only query matches nothing.
+ */
+export function searchCaptionItems(items, query) {
+  const needle = typeof query === 'string' ? query.trim() : '';
+  if (needle === '') {
+    return [];
+  }
+  const pattern = new RegExp(escapeRegExp(needle), 'gi');
+  const matches = [];
+  const normalized = normalizeCaptionItems(items);
+  normalized.forEach((item, index) => {
+    pattern.lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(item.content)) !== null) {
+      matches.push({
+        index,
+        start_time: item.start_time,
+        end_time: item.end_time,
+        content: item.content,
+        matchIndex: match.index,
+        matchLength: match[0].length,
+      });
+      // A zero-length match cannot happen for a non-empty needle,
+      // but never loop forever if the pattern is ever changed.
+      if (match[0].length === 0) {
+        pattern.lastIndex += 1;
+      }
+    }
+  });
+  return matches;
+}
+
+/**
+ * Replace every case-insensitive occurrence of `query` across the
+ * whole track and return the new, normalized items. Pure: the input
+ * items are not mutated, so the editor can keep the old state for
+ * undo. The replacement is inserted literally ($ sequences are not
+ * treated as substitution patterns). Items left with no text after
+ * the replacement are dropped by the final normalization, and the
+ * result keeps chronological order.
+ */
+export function replaceCaptionText(items, query, replacement) {
+  const needle = typeof query === 'string' ? query : '';
+  const normalized = normalizeCaptionItems(items);
+  if (needle.trim() === '') {
+    return normalized;
+  }
+  const pattern = new RegExp(escapeRegExp(needle), 'gi');
+  const literal = typeof replacement === 'string' ? replacement : '';
+  const replaced = normalized.map((item) => ({
+    ...item,
+    content: item.content.replace(pattern, () => literal).replace(/\s{2,}/g, ' ').trim(),
+  }));
+  return normalizeCaptionItems(replaced);
+}

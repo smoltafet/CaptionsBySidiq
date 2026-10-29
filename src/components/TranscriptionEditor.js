@@ -1,5 +1,6 @@
+import {useState} from "react";
 import TranscriptionItem from "@/components/TranscriptionItem";
-import {summarizeCaptionQuality} from "@/libs/awsTranscriptionHelpers";
+import {replaceCaptionText, searchCaptionItems, summarizeCaptionQuality} from "@/libs/awsTranscriptionHelpers";
 
 const ISSUE_LABELS = {
   'too-fast': 'reading too fast',
@@ -22,6 +23,22 @@ export default function TranscriptionEditor({
   const topIssue = quality
     ? Object.entries(quality.issueCounts).sort((a, b) => b[1] - a[1])[0]
     : null;
+
+  // Find & replace across the whole track: a name or term the
+  // transcription got wrong usually went wrong everywhere, and fixing
+  // it item by item is slow and easy to miss one.
+  const [findText, setFindText] = useState('');
+  const [replaceText, setReplaceText] = useState('');
+  const matchCount = findText.trim() === ''
+    ? 0
+    : searchCaptionItems(awsTranscriptionItems, findText).length;
+
+  function replaceAll() {
+    if (matchCount === 0) {
+      return;
+    }
+    setAwsTranscriptionItems(replaceCaptionText(awsTranscriptionItems, findText, replaceText));
+  }
 
   function updateTranscriptionItem(index, prop, ev) {
     const newAwsItems = [...awsTranscriptionItems];
@@ -51,6 +68,31 @@ export default function TranscriptionEditor({
               )}
             </span>
           )}
+        </div>
+      )}
+      {awsTranscriptionItems.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 p-2 mb-2 rounded-md bg-violet-900/60 text-sm">
+          <input
+            value={findText}
+            onChange={(ev) => setFindText(ev.target.value)}
+            placeholder="Find in captions"
+            className="bg-violet-950/60 rounded px-2 py-1 flex-1 min-w-28"
+          />
+          <input
+            value={replaceText}
+            onChange={(ev) => setReplaceText(ev.target.value)}
+            placeholder="Replace with"
+            className="bg-violet-950/60 rounded px-2 py-1 flex-1 min-w-28"
+          />
+          <button
+            onClick={replaceAll}
+            disabled={matchCount === 0}
+            className="bg-violet-600 disabled:opacity-40 rounded px-3 py-1">
+            Replace all
+          </button>
+          <span className="text-violet-200">
+            {findText.trim() === '' ? '' : `${matchCount} match${matchCount === 1 ? '' : 'es'}`}
+          </span>
         </div>
       )}
       <div className="grid grid-cols-3 sticky top-0 bg-violet-800/80 p-2 rounded-md">
