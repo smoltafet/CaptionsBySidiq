@@ -262,6 +262,41 @@ export function shiftCaptionItems(items, offsetSeconds) {
   return shifted;
 }
 
+/**
+ * Multiply every item's timings by `factor`, for re-timing a track
+ * against a version of the video that plays at a different speed:
+ * the classic case is a frame-rate conversion (23.976 fps to 25 fps
+ * needs a factor of about 0.959), and a screen recording re-exported
+ * at 1.25x needs 0.8. Shift handles a moved start point; this handles
+ * a stretched or compressed timeline, where a fixed offset would
+ * drift further off the longer the video runs.
+ *
+ * Times are rounded to whole milliseconds, the precision the SRT/VTT
+ * exporters print, so re-exporting a rescaled track does not accumulate
+ * float dust. A non-positive or non-numeric factor is not a usable
+ * speed change, so the normalized track is returned unchanged. Pure.
+ */
+export function rescaleCaptionTimings(items, factor) {
+  const scale = Number.parseFloat(factor);
+  const normalized = normalizeCaptionItems(items);
+  if (!Number.isFinite(scale) || scale <= 0 || scale === 1) {
+    return normalized;
+  }
+  const roundMs = (seconds) => Math.round(seconds * scale * 1000) / 1000;
+  return normalized.map((item) => {
+    const start = roundMs(Number.parseFloat(item.start_time));
+    let end = roundMs(Number.parseFloat(item.end_time));
+    if (end <= start) {
+      end = Math.round((start + MIN_CUE_DURATION_SECONDS) * 1000) / 1000;
+    }
+    return {
+      start_time: String(start),
+      end_time: String(end),
+      content: item.content,
+    };
+  });
+}
+
 function itemsToCues(items, formatTimestamp) {
   let output = '';
   let i = 1;
