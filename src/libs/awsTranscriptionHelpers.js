@@ -619,3 +619,49 @@ export function replaceCaptionText(items, query, replacement) {
   }));
   return normalizeCaptionItems(replaced);
 }
+
+export const DEFAULT_PLAINTEXT_OPTIONS = {
+  // A silence longer than this between two cues starts a new
+  // paragraph in the plain-text transcript.
+  paragraphPauseSeconds: 1.5,
+};
+
+/**
+ * Render the track as a plain-text transcript: the grouped cues'
+ * words in order, split into paragraphs wherever the speaker pauses
+ * for longer than `paragraphPauseSeconds` (default 1.5s). Until now
+ * the only downloads were caption files (SRT/VTT), which are awkward
+ * to paste into notes, docs, or a description box; this is the
+ * readable version of the same track. Paragraphs are joined with a
+ * blank line and the result ends with a single trailing newline. An
+ * empty or junk-only track yields an empty string.
+ */
+export function transcriptionItemsToPlainText(items, options) {
+  const pauseThreshold =
+    options && typeof options.paragraphPauseSeconds === 'number' && options.paragraphPauseSeconds >= 0
+      ? options.paragraphPauseSeconds
+      : DEFAULT_PLAINTEXT_OPTIONS.paragraphPauseSeconds;
+  const cues = groupItemsIntoCues(normalizeCaptionItems(items));
+  const paragraphs = [];
+  let current = '';
+  let previousEnd = null;
+  for (const cue of cues) {
+    const text = (cue.content || '').trim().replace(/\s{2,}/g, ' ');
+    if (text === '') {
+      continue;
+    }
+    const start = toSeconds(cue.start_time) ?? 0;
+    const end = toSeconds(cue.end_time) ?? start;
+    if (current !== '' && previousEnd !== null && start - previousEnd > pauseThreshold) {
+      paragraphs.push(current);
+      current = text;
+    } else {
+      current = current === '' ? text : `${current} ${text}`;
+    }
+    previousEnd = end;
+  }
+  if (current !== '') {
+    paragraphs.push(current);
+  }
+  return paragraphs.length === 0 ? '' : `${paragraphs.join('\n\n')}\n`;
+}
