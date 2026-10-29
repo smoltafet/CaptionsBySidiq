@@ -1,5 +1,5 @@
 import SparklesIcon from "@/components/SparklesIcon";
-import {transcriptionItemsToSrt, transcriptionItemsToVtt} from "@/libs/awsTranscriptionHelpers";
+import {transcriptionItemsToPlainText, transcriptionItemsToSrt, transcriptionItemsToVtt} from "@/libs/awsTranscriptionHelpers";
 import {FFmpeg} from "@ffmpeg/ffmpeg";
 import {toBlobURL, fetchFile} from "@ffmpeg/util";
 import {useEffect, useState, useRef} from "react";
@@ -33,15 +33,16 @@ export default function ResultVideo({filename,transcriptionItems}) {
   }
 
   function downloadCaptions(format) {
-    const isVtt = format === 'vtt';
-    const content = isVtt
+    const content = format === 'vtt'
       ? transcriptionItemsToVtt(transcriptionItems)
-      : transcriptionItemsToSrt(transcriptionItems);
+      : format === 'txt'
+        ? transcriptionItemsToPlainText(transcriptionItems)
+        : transcriptionItemsToSrt(transcriptionItems);
     const blob = new Blob([content], {type: 'text/plain'});
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = filename.replace(/\.[^.]+$/, '') + (isVtt ? '.vtt' : '.srt');
+    link.download = filename.replace(/\.[^.]+$/, '') + '.' + format;
     link.click();
     URL.revokeObjectURL(url);
   }
@@ -104,6 +105,11 @@ export default function ResultVideo({filename,transcriptionItems}) {
           onClick={() => downloadCaptions('vtt')}
           className="bg-gray-700 py-2 px-6 rounded-full inline-flex gap-2 border-2 border-purple-700/50 cursor-pointer">
           <span>Download .vtt</span>
+        </button>
+        <button
+          onClick={() => downloadCaptions('txt')}
+          className="bg-gray-700 py-2 px-6 rounded-full inline-flex gap-2 border-2 border-purple-700/50 cursor-pointer">
+          <span>Download .txt</span>
         </button>
       </div>
       <div>
