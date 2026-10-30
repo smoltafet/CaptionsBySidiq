@@ -340,6 +340,107 @@ export function fillCaptionGaps(items, options) {
   });
 }
 
+export const DEFAULT_SPLIT_LIMITS = {
+  // Same readability ceilings the cue grouper aims for, applied here
+  // to single items that arrive already long (an imported SRT cue, a
+  // pasted transcript line) instead of as word-by-word items.
+  maxDurationSeconds: 7,
+  maxCharacters: 84,
+  maxWords: 14,
+};
+
+/**
+ * Split items that exceed the readability limits into consecutive
+ * pieces that respect them. The quality analyzer flags cues that run
+ * too long, carry too much text, or pack too many words, but until
+ * now nothing could fix them short of re-transcribing.
+ *
+ * Text is split only at word boundaries, greedily packing words so
+ * each piece stays within maxWords and maxCharacters (a single word
+ * longer than maxCharacters keeps its own piece; words are never
+ * cut). The item's time span is divided between the pieces in
+ * proportion to their character counts, so pieces stay in order,
+ * never overlap, and together cover exactly the original span.
+ * A piece can still run long when a few words span a long silence;
+ * the split is by text first. Limits that are not positive numbers
+ * fall back to the defaults. Pure: the input is normalized first
+ * and never mutated.
+ */
+export function splitLongCaptionItems(items, limits) {
+  const usable = (value, fallback) =>
+    typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
+  const maxDurationSeconds = usable(limits?.maxDurationSeconds, DEFAULT_SPLIT_LIMITS.maxDurationSeconds);
+  const maxCharacters = usable(limits?.maxCharacters, DEFAULT_SPLIT_LIMITS.maxCharacters);
+  const maxWords = Math.max(1, Math.floor(usable(limits?.maxWords, DEFAULT_SPLIT_LIMITS.maxWords)));
+
+  const round3 = (value) => Math.round(value * 1000) / 1000;
+
+  const output = [];
+  for (const item of normalizeCaptionItems(items)) {
+    const start = Number.parseFloat(item.start_time);
+    const end = Number.parseFloat(item.end_time);
+    const words = item.content.split(/\s+/).filter(Boolean);
+    const fits =
+      end - start <= maxDurationSeconds
+      && item.content.length <= maxCharacters
+      && words.length <= maxWords;
+    if (fits || words.length <= 1) {
+      output.push(item);
+      continue;
+    }
+
+    // Greedy word packing: a new piece starts when adding the next
+    // word would break the word or character ceiling.
+    const chunks = [];
+    let chunk = [];
+    let chunkLength = 0;
+    for (const word of words) {
+      const joinedLength = chunk.length === 0 ? word.length : chunkLength + 1 + word.length;
+      if (chunk.length > 0 && (chunk.length >= maxWords || joinedLength > maxCharacters)) {
+        chunks.push(chunk.join(' '));
+        chunk = [word];
+        chunkLength = word.length;
+      } else {
+        chunk.push(word);
+        chunkLength = joinedLength;
+      }
+    }
+    if (chunk.length > 0) {
+      chunks.push(chunk.join(' '));
+    }
+    if (chunks.length <= 1) {
+      output.push(item);
+      continue;
+    }
+
+    // Divide the span by character share, keeping boundaries
+    // strictly increasing so no piece is zero-length.
+    const totalCharacters = chunks.reduce((sum, text) => sum + text.length, 0);
+    let boundary = start;
+    chunks.forEach((text, index) => {
+      const isLast = index === chunks.length - 1;
+      const pieceEnd = isLast
+        ? end
+        : Math.min(
+            end - (chunks.length - 1 - index) * 0.001,
+            Math.max(
+              boundary + 0.001,
+              round3(start + ((end - start) * chunks
+                .slice(0, index + 1)
+                .reduce((sum, part) => sum + part.length, 0)) / totalCharacters),
+            ),
+          );
+      output.push({
+        start_time: String(round3(boundary)),
+        end_time: String(round3(pieceEnd)),
+        content: text,
+      });
+      boundary = pieceEnd;
+    });
+  }
+  return output;
+}
+
 function itemsToCues(items, formatTimestamp) {
   let output = '';
   let i = 1;
