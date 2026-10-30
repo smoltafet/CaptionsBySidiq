@@ -926,3 +926,53 @@ export function cleanCaptionItems(items, options) {
   }
   return normalizeCaptionItems(cleaned);
 }
+
+export const DEFAULT_DEDUPE_OPTIONS = {
+  // Compare text case-insensitively and ignoring trailing
+  // punctuation, so "Hello." and "hello" count as the same line.
+  ignoreCase: true,
+  // When a repeat is dropped, extend the kept item's end time to
+  // the repeat's end, so the line stays on screen for as long as
+  // the source track held it.
+  mergeRepeats: true,
+};
+
+function dedupeKey(text, ignoreCase) {
+  const collapsed = String(text).replace(/\s+/g, ' ').trim().replace(/[.!?…]+$/, '');
+  return ignoreCase ? collapsed.toLowerCase() : collapsed;
+}
+
+/**
+ * Remove consecutive duplicate caption items. Rolling auto-caption
+ * tracks and some exporters repeat the same line back to back (the
+ * same text at the next timestamp, sometimes with different casing
+ * or trailing punctuation); in the editor and in re-exports that
+ * reads as a stutter and doubles the line in plain-text output.
+ * Only consecutive repeats are dropped: the same line returning
+ * later, after other text, is a real repeat in the speech and is
+ * kept. With mergeRepeats (the default) the kept item's end time
+ * extends to the last repeat's end; with it off, repeats are simply
+ * dropped. The input is normalized first (sorted, timings
+ * repaired), so repeats that arrive out of order are still caught.
+ * Pure: the input items are not mutated.
+ */
+export function dedupeCaptionItems(items, options) {
+  const ignoreCase = options?.ignoreCase ?? DEFAULT_DEDUPE_OPTIONS.ignoreCase;
+  const mergeRepeats = options?.mergeRepeats ?? DEFAULT_DEDUPE_OPTIONS.mergeRepeats;
+  const output = [];
+  for (const item of normalizeCaptionItems(items)) {
+    const previous = output[output.length - 1];
+    if (previous && dedupeKey(previous.content, ignoreCase) === dedupeKey(item.content, ignoreCase)) {
+      if (mergeRepeats) {
+        const itemEnd = Number.parseFloat(item.end_time);
+        const previousEnd = Number.parseFloat(previous.end_time);
+        if (Number.isFinite(itemEnd) && itemEnd > previousEnd) {
+          output[output.length - 1] = { ...previous, end_time: item.end_time };
+        }
+      }
+      continue;
+    }
+    output.push(item);
+  }
+  return output;
+}
