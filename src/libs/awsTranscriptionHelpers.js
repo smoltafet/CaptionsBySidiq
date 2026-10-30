@@ -844,3 +844,85 @@ export function transcriptionItemsToPlainText(items, options) {
   }
   return paragraphs.length === 0 ? '' : `${paragraphs.join('\n\n')}\n`;
 }
+
+const NAMED_ENTITIES = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+};
+
+/**
+ * Decode HTML entities in caption text: the named entities caption
+ * files actually use, plus decimal (&#39;) and hex (&#x27;) numeric
+ * references. Unknown or malformed entities are left untouched, and
+ * decoding runs in a single pass, so "&amp;lt;" becomes "&lt;"
+ * (the literal text the author wrote), not "<".
+ */
+function decodeCaptionEntities(text) {
+  return text.replace(/&(#x[0-9a-fA-F]+|#\d+|[a-zA-Z]+);/g, (whole, body) => {
+    if (body.startsWith('#x') || body.startsWith('#X')) {
+      const code = Number.parseInt(body.slice(2), 16);
+      return Number.isFinite(code) && code >= 0 && code <= 0x10ffff
+        ? String.fromCodePoint(code)
+        : whole;
+    }
+    if (body.startsWith('#')) {
+      const code = Number.parseInt(body.slice(1), 10);
+      return Number.isFinite(code) && code >= 0 && code <= 0x10ffff
+        ? String.fromCodePoint(code)
+        : whole;
+    }
+    return Object.prototype.hasOwnProperty.call(NAMED_ENTITIES, body)
+      ? NAMED_ENTITIES[body]
+      : whole;
+  });
+}
+
+export const DEFAULT_CLEAN_OPTIONS = {
+  // Drop bracketed sound cues such as [MUSIC] or [APPLAUSE] (and
+  // parenthesised ones such as (laughter)) from the text.
+  removeBracketedCues: false,
+  // Strip a leading speaker label such as ">> JANE:" or "JANE DOE:"
+  // from each item.
+  removeSpeakerLabels: false,
+};
+
+/**
+ * Clean up caption text that came from an imported file rather than
+ * from the transcriber. Imported SRT/VTT cues routinely carry HTML
+ * markup (<i>...</i>, <font color="...">), HTML entities (&amp;,
+ * &#39;), bracketed sound cues ([MUSIC]) and speaker labels
+ * (>> JANE:), all of which otherwise land verbatim in the editor
+ * and in every re-export. This strips markup tags, decodes
+ * entities, collapses whitespace, and (opt-in, via
+ * DEFAULT_CLEAN_OPTIONS) removes bracketed cues and leading
+ * speaker labels. Tag stripping runs before entity decoding, so an
+ * encoded "&lt;i&gt;" survives as the literal text "<i>" instead
+ * of being mistaken for markup. Items left with no text are
+ * dropped by the final normalization, which also sorts and
+ * repairs timings. Pure: the input items are not mutated.
+ */
+export function cleanCaptionItems(items, options) {
+  const removeBracketedCues = Boolean(options?.removeBracketedCues);
+  const removeSpeakerLabels = Boolean(options?.removeSpeakerLabels);
+  const cleaned = [];
+  for (const item of items || []) {
+    if (!item || typeof item.content !== 'string') {
+      continue;
+    }
+    let text = item.content.replace(/<[^>]*>/g, ' ');
+    text = decodeCaptionEntities(text);
+    if (removeBracketedCues) {
+      text = text.replace(/\[[^\]]*\]/g, ' ').replace(/\([^)]*\)/g, ' ');
+    }
+    if (removeSpeakerLabels) {
+      text = text.replace(/^\s*(?:>>\s*)?[A-Z][A-Z0-9 .'-]{0,30}:\s+/, '');
+    }
+    text = text.replace(/\s{2,}/g, ' ').trim();
+    cleaned.push({ start_time: item.start_time, end_time: item.end_time, content: text });
+  }
+  return normalizeCaptionItems(cleaned);
+}
