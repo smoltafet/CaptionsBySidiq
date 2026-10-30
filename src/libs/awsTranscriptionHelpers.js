@@ -297,6 +297,49 @@ export function rescaleCaptionTimings(items, factor) {
   });
 }
 
+export const DEFAULT_GAP_FILL_OPTIONS = {
+  // Silences up to this long between items are bridged; longer pauses
+  // are real breaks (a new speaker, a scene change) and stay open.
+  maxGapSeconds: 1,
+};
+
+/**
+ * Extend each item's end to meet the next item's start when the
+ * silence between them is short (at most `maxGapSeconds`, default
+ * 1s). Word-by-word transcription items leave small gaps everywhere,
+ * and players that highlight or clear the caption during a gap make
+ * the text flicker; bridging the short gaps keeps a caption on
+ * screen continuously through a phrase while real pauses stay open.
+ *
+ * Only end times move, and never past the next item's start, so the
+ * result cannot overlap. A negative or non-numeric threshold is not
+ * usable, so the normalized track is returned unchanged. Pure.
+ */
+export function fillCaptionGaps(items, options) {
+  const maxGap =
+    options && typeof options.maxGapSeconds === 'number' && options.maxGapSeconds >= 0
+      ? options.maxGapSeconds
+      : DEFAULT_GAP_FILL_OPTIONS.maxGapSeconds;
+  const normalized = normalizeCaptionItems(items);
+  return normalized.map((item, index) => {
+    const next = normalized[index + 1];
+    if (!next) {
+      return item;
+    }
+    const end = Number.parseFloat(item.end_time);
+    const nextStart = Number.parseFloat(next.start_time);
+    const gap = nextStart - end;
+    if (gap <= 0 || gap > maxGap) {
+      return item;
+    }
+    return {
+      start_time: item.start_time,
+      end_time: String(Math.round(nextStart * 1000) / 1000),
+      content: item.content,
+    };
+  });
+}
+
 function itemsToCues(items, formatTimestamp) {
   let output = '';
   let i = 1;
