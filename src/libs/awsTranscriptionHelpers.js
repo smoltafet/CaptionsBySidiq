@@ -976,3 +976,56 @@ export function dedupeCaptionItems(items, options) {
   }
   return output;
 }
+
+export const DEFAULT_CLIP_OPTIONS = {
+  // Shift the kept items so the clip starts at zero, matching a
+  // video that was trimmed to the same range. Turn it off to keep
+  // the original timeline (for example when the clip will be
+  // re-merged into the full track later).
+  rezero: true,
+};
+
+/**
+ * Extract the caption items that fall inside a time range, for
+ * sharing or exporting just one segment of a video: the classic
+ * case is clipping a quote, where the captions should cover only
+ * the clip and start when it starts. An item is kept when it
+ * overlaps the range at all; its timings are clamped to the range
+ * boundaries, so a line that begins before the clip starts at the
+ * clip's first frame instead of leaking earlier speech timing.
+ * With rezero (the default) every kept time has the range start
+ * subtracted. An unusable range (end at or before start, or a
+ * non-numeric bound other than an omitted end) yields no items; an
+ * omitted end means "to the end of the track". Times are rounded
+ * to whole milliseconds, matching the exporters. The input is
+ * normalized first. Pure: the input items are not mutated.
+ */
+export function clipCaptionItems(items, startSeconds, endSeconds, options) {
+  const rezero = options?.rezero ?? DEFAULT_CLIP_OPTIONS.rezero;
+  const start = Number.parseFloat(startSeconds);
+  const end = endSeconds == null ? Infinity : Number.parseFloat(endSeconds);
+  if (!Number.isFinite(start) || start < 0 || Number.isNaN(end) || end <= start) {
+    return [];
+  }
+  const roundMs = (seconds) => Math.round(seconds * 1000) / 1000;
+  const clipped = [];
+  for (const item of normalizeCaptionItems(items)) {
+    const itemStart = Number.parseFloat(item.start_time);
+    const itemEnd = Number.parseFloat(item.end_time);
+    if (itemEnd <= start || itemStart >= end) {
+      continue;
+    }
+    const clampedStart = Math.max(itemStart, start);
+    const clampedEnd = Math.min(itemEnd, end);
+    if (clampedEnd <= clampedStart) {
+      continue;
+    }
+    const shift = rezero ? start : 0;
+    clipped.push({
+      start_time: String(roundMs(clampedStart - shift)),
+      end_time: String(roundMs(clampedEnd - shift)),
+      content: item.content,
+    });
+  }
+  return clipped;
+}
