@@ -1029,3 +1029,74 @@ export function clipCaptionItems(items, startSeconds, endSeconds, options) {
   }
   return clipped;
 }
+
+export const DEFAULT_MERGE_OPTIONS = {
+  // Largest silence between two fragments that still reads as one
+  // line of speech rather than two separate lines.
+  maxGapSeconds: 0.5,
+  // A merged item stays within the same per-cue limits the rest of
+  // this module uses, so a merge never creates a cue the exporters
+  // would have to split again.
+  maxCharacters: 84,
+  maxWords: 14,
+  maxDurationSeconds: 7,
+};
+
+const SENTENCE_END_PATTERN = /[.!?…]["')\]]*$/;
+
+/**
+ * Merge consecutive caption items that are fragments of one line.
+ * Some importers and line-wrapped exports split a single spoken
+ * sentence into several back-to-back items; in the editor that reads
+ * as stutter and in plain-text output it breaks the sentence apart.
+ * Two neighbours merge only when all of these hold: the gap between
+ * them is at most maxGapSeconds, the earlier fragment does not end a
+ * sentence (terminal punctuation means the break is real), and the
+ * combined item stays within the character, word, and duration
+ * limits. A fragment ending in a hyphen is a word split across the
+ * break, so the hyphen is dropped and the pieces join with no space;
+ * other merges join with a single space. Merging is iterative, so a
+ * run of fragments can fold into one item while every intermediate
+ * result still respects the limits. The input is normalized first.
+ * Pure: the input items are not mutated.
+ */
+export function mergeAdjacentCaptionItems(items, options) {
+  const maxGapSeconds = options?.maxGapSeconds ?? DEFAULT_MERGE_OPTIONS.maxGapSeconds;
+  const maxCharacters = options?.maxCharacters ?? DEFAULT_MERGE_OPTIONS.maxCharacters;
+  const maxWords = options?.maxWords ?? DEFAULT_MERGE_OPTIONS.maxWords;
+  const maxDurationSeconds =
+    options?.maxDurationSeconds ?? DEFAULT_MERGE_OPTIONS.maxDurationSeconds;
+  const merged = [];
+  for (const item of normalizeCaptionItems(items)) {
+    const previous = merged[merged.length - 1];
+    if (!previous) {
+      merged.push({ ...item });
+      continue;
+    }
+    const gap =
+      Number.parseFloat(item.start_time) - Number.parseFloat(previous.end_time);
+    const hyphenSplit = previous.content.endsWith('-');
+    const combinedContent = hyphenSplit
+      ? previous.content.slice(0, -1) + item.content
+      : `${previous.content} ${item.content}`;
+    const combinedDuration =
+      Number.parseFloat(item.end_time) - Number.parseFloat(previous.start_time);
+    const wordCount = combinedContent.split(/\s+/).filter(Boolean).length;
+    const canMerge =
+      gap <= maxGapSeconds &&
+      !SENTENCE_END_PATTERN.test(previous.content) &&
+      combinedContent.length <= maxCharacters &&
+      wordCount <= maxWords &&
+      combinedDuration <= maxDurationSeconds;
+    if (canMerge) {
+      merged[merged.length - 1] = {
+        start_time: previous.start_time,
+        end_time: item.end_time,
+        content: combinedContent,
+      };
+    } else {
+      merged.push({ ...item });
+    }
+  }
+  return merged;
+}
