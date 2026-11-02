@@ -1100,3 +1100,112 @@ export function mergeAdjacentCaptionItems(items, options) {
   }
   return merged;
 }
+
+export const DEFAULT_GAP_AUDIT_OPTIONS = {
+  // Silences shorter than this are normal word and sentence spacing;
+  // a full second of dead air inside a track is worth surfacing.
+  minGapSeconds: 1,
+};
+
+const round3 = (value) => Math.round(value * 1000) / 1000;
+
+/**
+ * Silences between consecutive caption items, longest first.
+ * Operates on the normalized items (sorted, overlaps repaired), so a
+ * "gap" here is real dead air in the exported track, not an artifact
+ * of unsorted input. Each entry names the index of the item before
+ * the silence, the silence's start/end in seconds, and its duration.
+ * Only gaps of at least minGapSeconds (default 1) are returned.
+ */
+export function findCaptionGaps(items, options) {
+  const minGapSeconds =
+    options?.minGapSeconds ?? DEFAULT_GAP_AUDIT_OPTIONS.minGapSeconds;
+  const normalized = normalizeCaptionItems(items);
+  const gaps = [];
+  for (let i = 1; i < normalized.length; i++) {
+    const previousEnd = Number.parseFloat(normalized[i - 1].end_time);
+    const start = Number.parseFloat(normalized[i].start_time);
+    const duration = start - previousEnd;
+    if (Number.isFinite(duration) && duration >= minGapSeconds) {
+      gaps.push({
+        afterIndex: i - 1,
+        start: round3(previousEnd),
+        end: round3(start),
+        duration: round3(duration),
+      });
+    }
+  }
+  return gaps.sort((a, b) => b.duration - a.duration);
+}
+
+/**
+ * Timing audit for a whole track: where the silences are, whether the
+ * raw items overlap each other, and how much of the track's span is
+ * actually covered by captions. Gaps are measured on the normalized
+ * items (what the exporters will emit); overlaps are measured on the
+ * raw items sorted by start time, because normalization repairs
+ * overlaps away and would hide them. Durations are rounded to
+ * milliseconds, the precision the exporters use.
+ */
+export function summarizeCaptionTiming(items, options) {
+  const normalized = normalizeCaptionItems(items);
+  const gaps = findCaptionGaps(items, options);
+  const totalGapSeconds = round3(
+    gaps.reduce((total, gap) => total + gap.duration, 0),
+  );
+
+  const rawSorted = (Array.isArray(items) ? items : [])
+    .filter(
+      (item) =>
+        item &&
+        Number.isFinite(Number.parseFloat(item.start_time)) &&
+        Number.isFinite(Number.parseFloat(item.end_time)),
+    )
+    .map((item) => ({
+      start: Number.parseFloat(item.start_time),
+      end: Number.parseFloat(item.end_time),
+    }))
+    .sort((a, b) => a.start - b.start);
+  let overlapCount = 0;
+  let totalOverlapSeconds = 0;
+  for (let i = 1; i < rawSorted.length; i++) {
+    const overlap =
+      Math.min(rawSorted[i - 1].end, rawSorted[i].end) - rawSorted[i].start;
+    if (overlap > 0) {
+      overlapCount += 1;
+      totalOverlapSeconds += overlap;
+    }
+  }
+
+  const coveredSeconds = round3(
+    normalized.reduce(
+      (total, item) =>
+        total +
+        Math.max(
+          0,
+          Number.parseFloat(item.end_time) - Number.parseFloat(item.start_time),
+        ),
+      0,
+    ),
+  );
+  const spanSeconds =
+    normalized.length > 0
+      ? round3(
+          Number.parseFloat(normalized[normalized.length - 1].end_time) -
+            Number.parseFloat(normalized[0].start_time),
+        )
+      : 0;
+
+  return {
+    itemCount: normalized.length,
+    gapCount: gaps.length,
+    gaps,
+    largestGapSeconds: gaps.length > 0 ? gaps[0].duration : 0,
+    totalGapSeconds,
+    overlapCount,
+    totalOverlapSeconds: round3(totalOverlapSeconds),
+    coveredSeconds,
+    spanSeconds,
+    silenceShare: spanSeconds > 0 ? round3(totalGapSeconds / spanSeconds) : 0,
+  };
+}

@@ -1,6 +1,6 @@
 import {useState} from "react";
 import TranscriptionItem from "@/components/TranscriptionItem";
-import {replaceCaptionText, searchCaptionItems, summarizeCaptionQuality} from "@/libs/awsTranscriptionHelpers";
+import {replaceCaptionText, searchCaptionItems, summarizeCaptionQuality, summarizeCaptionTiming} from "@/libs/awsTranscriptionHelpers";
 
 const ISSUE_LABELS = {
   'too-fast': 'reading too fast',
@@ -22,6 +22,11 @@ export default function TranscriptionEditor({
     : null;
   const topIssue = quality
     ? Object.entries(quality.issueCounts).sort((a, b) => b[1] - a[1])[0]
+    : null;
+  // Timing audit next to the quality score: long silences and raw
+  // overlaps are invisible in the item list but obvious in a recording.
+  const timing = awsTranscriptionItems.length > 0
+    ? summarizeCaptionTiming(awsTranscriptionItems)
     : null;
 
   // Find & replace across the whole track: a name or term the
@@ -66,6 +71,16 @@ export default function TranscriptionEditor({
               {topIssue && (
                 <> — most common: {ISSUE_LABELS[topIssue[0]] || topIssue[0]} ({topIssue[1]})</>
               )}
+            </span>
+          )}
+          {timing && timing.gapCount > 0 && (
+            <span className="text-violet-200">
+              {timing.gapCount} gaps over 1s · largest {timing.largestGapSeconds}s
+            </span>
+          )}
+          {timing && timing.overlapCount > 0 && (
+            <span className="text-amber-300">
+              {timing.overlapCount} overlapping items
             </span>
           )}
         </div>
